@@ -1,0 +1,9 @@
+langgraph 
+streamlit 
+pandas 
+chromadb 
+python-dotenv 
+pyarrow
+duckdb
+plotly
+tabulate
