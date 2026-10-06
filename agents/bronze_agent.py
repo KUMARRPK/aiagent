@@ -10,6 +10,9 @@ from core.audit import AuditLogger
 from core.llm import call_llm
 from core.parquet_safety import sanitize_for_parquet
 
+# Date formats present in raw data — used for fallback fix
+_DATE_FORMATS = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"]
+
 
 def _extract_sql(text: str) -> str:
     match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL)
@@ -19,6 +22,26 @@ def _extract_sql(text: str) -> str:
     if match:
         return match.group(1).strip()
     return ""
+
+
+def _fix_dates_from_raw(df: pd.DataFrame, fp: str) -> pd.DataFrame:
+    """
+    BUG FIX: TRY_CAST(date AS DATE) silently fails for MM/DD/YYYY and
+    MM-DD-YYYY formats, turning 32% of rows to NULL.
+    This function repairs those NULLs after bronze load.
+    """
+    try:
+        raw = pd.read_csv(fp, usecols=lambda c: "date" in c.lower())
+        for col in raw.columns:
+            if col in df.columns:
+                parsed = pd.to_datetime(
+                    raw[col], format="mixed", dayfirst=False, errors="coerce"
+                )
+                null_mask = df[col].isna()
+                df.loc[null_mask, col] = parsed[null_mask].values
+    except Exception:
+        pass
+    return df
 
 
 def run(input_files: list[str], sttm_path: str, run_id: str) -> list[str]:
@@ -38,7 +61,12 @@ def run(input_files: list[str], sttm_path: str, run_id: str) -> list[str]:
             f"Column type sample (first 3 rows):\n{sample_df.to_string(index=False)}\n\n"
             "Generate ONE DuckDB SELECT SQL using read_csv_auto() with "
             "all_varchar=true. Use TRY_CAST() for type_cast rules. Map: "
-            "datetime->TIMESTAMP, float->DOUBLE, int->INTEGER, str->VARCHAR. "
+            "float->DOUBLE, int->INTEGER, str->VARCHAR. "
+            "IMPORTANT: For any date/datetime column, do NOT use TRY_CAST(col AS DATE). "
+            "Instead use: COALESCE(TRY_STRPTIME(col,'%Y-%m-%d'), "
+            "TRY_STRPTIME(col,'%m/%d/%Y'), "
+            "TRY_STRPTIME(col,'%m-%d-%Y'))::VARCHAR AS col "
+            "to handle mixed date formats without data loss.\n"
             "Do NOT add metadata columns in SQL (added afterward in Python).\n"
             "Respond with a ```sql fenced code block containing ONLY the SQL."
         )
@@ -59,6 +87,9 @@ def run(input_files: list[str], sttm_path: str, run_id: str) -> list[str]:
             df = pd.read_csv(fp)
             sql_used = "FALLBACK: pd.read_csv passthrough"
 
+        # FIX: Repair any NULL dates caused by TRY_CAST failure
+        df = _fix_dates_from_raw(df, fp)
+
         df["_load_timestamp"] = datetime.utcnow().isoformat() + "Z"
         df["_source_file"] = str(fp)
 
@@ -67,10 +98,16 @@ def run(input_files: list[str], sttm_path: str, run_id: str) -> list[str]:
         df.to_parquet(out_path, index=False)
         written_paths.append(str(out_path))
 
+        date_nulls = sum(
+            df[c].isna().sum()
+            for c in df.columns if "date" in c.lower()
+        )
+
         audit.log(
             "bronze_agent", "table_processed",
             table=table_name, output_path=str(out_path),
             row_count=len(df), sql=sql_used,
+            date_nulls_after_fix=int(date_nulls),
         )
 
     return written_paths
