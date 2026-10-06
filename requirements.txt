@@ -7,3 +7,4 @@ pyarrow
 duckdb
 plotly
 tabulate
+google-genai

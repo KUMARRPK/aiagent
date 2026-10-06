@@ -15,10 +15,9 @@ REPORTS_DIR = BASE_DIR / "data" / "reports"
 AUDIT_DIR = BASE_DIR / "data" / "audit_logs"
 UPLOADS_DIR = BASE_DIR / "data" / "uploads"
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").strip().lower()
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
 def ensure_dirs() -> None:
     for d in (
